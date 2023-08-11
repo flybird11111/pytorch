@@ -32,6 +32,7 @@
 
 #include <fmt/format.h>
 #include <pybind11/chrono.h>
+#include <pybind11/embed.h>
 #include <torch/csrc/distributed/c10d/PrefixStore.hpp>
 
 #include <torch/csrc/distributed/c10d/comm.hpp>
@@ -1692,6 +1693,50 @@ Arguments:
                 return self->getBackend(device.type());
               },
               py::arg("device"),
+              py::call_guard<py::gil_scoped_release>())
+          .def(
+              "_register_on_completion_hook",
+              [](const c10::intrusive_ptr<::c10d::ProcessGroup>& self,
+                 py::object hook) {
+                // We need to wrap a py::object hook with a wrapper to hold
+                // GIL before dereferencing the py::object.
+                // This needs to happen here instead of in ProcessGroup
+                // backend implementations and the latter cannot depend on
+                // python-related libs.
+                self->registerOnCompletionHook(
+                    [hookWrapper = ::c10d::PythonOnCompletionHook(std::move(
+                         hook))](c10::intrusive_ptr<::c10d::Work> work) {
+                      hookWrapper(work);
+                    });
+              },
+              py::arg("hook"),
+              // Intentionally holding GIL as we move hook py::object. This
+              // should be OK as register a hook is cheap.
+              py::call_guard<py::gil_scoped_acquire>(),
+              R"(
+Register a hook function which is fired on every ``ProcessGroup::Work`` completion.
+The hook must have the following signature:
+
+>>> def hook(work: torch.distributed._Work) -> None:
+>>>     # custom code
+
+.. warning ::
+    This only works for NCCL backend for now. All hooks are fired on the cpp watch dog
+    thread. Firing the Python hook and acquiring GIL requires Python interpreter to be
+    alive. Therefore, users need to make sure calling ``destroy_process_group(pg)`` on
+    every active ProcessGroup ``pg`` before exiting.
+
+.. warning ::
+    Note that ``Work`` object passed to the hook is a partially copied version without
+    the output objects. So accessing the output tensors from ``Work`` will not work.
+
+
+Arguments:
+    hook (Callable): hook function.
+              )")
+          .def(
+              "_wait_for_pending_works",
+              &::c10d::ProcessGroup::waitForPendingWorks,
               py::call_guard<py::gil_scoped_release>());
 
   py::enum_<::c10d::ProcessGroup::BackendType>(processGroup, "BackendType")
@@ -2367,7 +2412,24 @@ Example::
                     3. For mixed CPU-GPU work (e.g. sending GPU tensors with GLOO), ``fut.done()`` returns
                        true when tensors have arrived on respective nodes, but not yet necessarily synched on
                        respective GPUs (similarly to GPU work).
-           )");
+           )")
+      .def(
+          "_get_op_type",
+          [](::c10d::Work& work) -> int {
+            return static_cast<int>(work.retrieveOpType());
+          })
+      .def(
+          "_get_duration",
+          &::c10d::Work::getDuration,
+          py::call_guard<py::gil_scoped_release>(),
+          R"(
+              Returns:
+                  Duration of the corresponding collective communication.
+
+              .. warning ::
+                  This API only works for NCCL backend for now and must set
+                  NCCL_ENABLE_TIMING environment variable.
+            )");
 
   py::class_<c10::DDPLoggingData>(module, "DDPLoggingData")
       .def(py::init<>())

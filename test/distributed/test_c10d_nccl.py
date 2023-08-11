@@ -11,7 +11,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import timedelta
-from itertools import product
+from itertools import chain, product
 from unittest import mock
 
 import torch
@@ -2453,6 +2453,199 @@ class DistributedDataParallelTest(
         tensor = torch.ones((2, 16, 768, 1152), dtype=torch.float32, device=device).to(memory_format=torch.channels_last)
         process_group.broadcast([tensor]).wait()
 
+
+# These are internal OpType enum values in Work.hpp, the value is subject to
+# change in future versions.
+BROADCAST = 0
+ALLREDUCE = 1
+ALLGATHER = 4
+
+
+class WorkHookTest(MultiProcessTestCase):
+
+    @property
+    def world_size(self):
+        return 2
+
+    def setUp(self):
+        super().setUp()
+        # set NCCL_ENABLE_TIMING to enable timing for CUDAEvents
+        # in ProcessGroup Work
+        os.environ["NCCL_ENABLE_TIMING"] = "1"
+        self._spawn_processes()
+
+    def tearDown(self):
+        super().tearDown()
+        try:
+            os.remove(self.file_name)
+        except OSError:
+            pass
+
+    def _get_store(self):
+        return dist.FileStore(self.file_name, self.world_size)
+
+    def _get_process_group(self):
+        store = self._get_store()
+        c10d.init_process_group("nccl", store=store, rank=self.rank, world_size=self.world_size)
+        return c10d.distributed_c10d._get_default_group()
+
+    @requires_nccl()
+    @skip_if_lt_x_gpu(2)
+    def test_on_completion_hook_broadcast(self):
+        pg = self._get_process_group()
+        num_hook_fired = 0
+        durations: List[float] = []
+
+        def hook(work):
+            nonlocal num_hook_fired, durations
+            num_hook_fired += 1
+            durations.append(work._get_duration())
+
+        pg._register_on_completion_hook(hook)
+        tensor = torch.ones([2, 3]).cuda(self.rank) * self.rank
+        pg.broadcast([tensor]).wait()
+        pg.broadcast([tensor]).wait()
+
+        # N.B.: destroy_process_group is necessary to wait for
+        # all pending works to finish.
+        c10d.destroy_process_group(pg)
+
+        self.assertEqual(num_hook_fired, 2)
+        self.assertEqual(len(durations), 2)
+        for duration in durations:
+            self.assertTrue(duration > 0)
+
+        self.assertEqual(tensor, torch.zeros([2, 3]).cuda(self.rank))
+
+    @requires_nccl()
+    @skip_if_lt_x_gpu(2)
+    def test_on_completion_hook_mixed_ops(self):
+        pg = self._get_process_group()
+        num_hook_fired = 0
+        durations: List[float] = []
+
+        def hook(work):
+            nonlocal num_hook_fired, durations
+            num_hook_fired += 1
+            durations.append(work._get_duration())
+
+        pg._register_on_completion_hook(hook)
+        tensor = torch.ones([2, 3]).cuda(self.rank)
+        tensor_list = [torch.empty_like(tensor) for _ in range(self.world_size)]
+        # intentionall using async ops.
+        pg.allreduce(tensor)
+        pg.allgather(tensor_list, tensor)
+        pg.allreduce(tensor)
+
+        # N.B.: destroy_process_group is necessary to wait for
+        # all pending works to finish.
+        c10d.destroy_process_group(pg)
+
+        self.assertEqual(num_hook_fired, 3)
+        self.assertEqual(len(durations), 3)
+        for duration in durations:
+            self.assertTrue(duration > 0)
+
+        self.assertEqual(
+            tensor,
+            torch.ones([2, 3]).cuda(self.rank) * self.world_size * self.world_size,
+        )
+
+        self.assertEqual(
+            tensor_list,
+            [torch.ones([2, 3]).cuda(self.rank) * self.world_size for _ in range(self.world_size)],
+        )
+
+    @requires_nccl()
+    @skip_if_lt_x_gpu(2)
+    def test_on_completion_hook_with_ddp(self):
+        pg = self._get_process_group()
+        num_hook_fired: Dict[int, int] = {}
+        durations: Dict[int, List[float]] = {}
+
+        def hook(work):
+            nonlocal num_hook_fired, durations
+            op_type = work._get_op_type()
+            if op_type not in num_hook_fired:
+                num_hook_fired[op_type] = 0
+                durations[op_type] = []
+            num_hook_fired[op_type] += 1
+            durations[op_type].append(work._get_duration())
+
+        pg._register_on_completion_hook(hook)
+
+        nlayers = 10
+        net = nn.Sequential(
+            *[nn.Linear(1000, 1000, bias=False) for _ in range(nlayers)]
+        ).to(self.rank)
+
+        ddp = DistributedDataParallel(
+            net,
+            device_ids=[self.rank],
+            process_group=pg,
+            bucket_cap_mb=1,
+        )
+
+        pg._wait_for_pending_works()
+
+        # DDP is expected to synchronize model parameter by broadcasting
+        # from rank0 to other ranks. However, this is DDP's internal implementation,
+        # which is subject to change in future versions.
+        self.assertTrue(num_hook_fired[BROADCAST] > 0)
+        ctor_allreduce = num_hook_fired[ALLREDUCE] if ALLREDUCE in num_hook_fired else 0
+
+        x = torch.zeros(2, 1000).cuda(self.rank)
+        ddp(x).sum().backward()
+
+        c10d.destroy_process_group(pg)
+
+        self.assertTrue(ALLREDUCE in num_hook_fired)
+        # The number of allreduce ops depend on DDP internal implementation, but
+        # there should be at least one allreduce.
+        self.assertTrue(num_hook_fired[ALLREDUCE] - ctor_allreduce > 0)
+        self.assertTrue(all(duration > 0 for duration in chain(*(durations.values()))))
+
+    # Not testing FSDP due to https://github.com/pytorch/pytorch/issues/90848.
+    # We cannot disable workCleanupLoop() as hooks are fired in that thread.
+
+    @requires_nccl()
+    @skip_if_lt_x_gpu(2)
+    def test_on_completion_hook_all_gather_object(self):
+        torch.cuda.set_device(self.rank)
+
+        pg = self._get_process_group()
+        num_hook_fired: Dict[int, int] = {}
+        durations: Dict[int, List[float]] = {}
+
+        def hook(work):
+            nonlocal num_hook_fired, durations
+            op_type = work._get_op_type()
+            if op_type not in num_hook_fired:
+                num_hook_fired[op_type] = 0
+                durations[op_type] = []
+            num_hook_fired[op_type] += 1
+            durations[op_type].append(work._get_duration())
+
+        pg._register_on_completion_hook(hook)
+
+        obj = {"rank": self.rank, "world_size": self.world_size}
+        obj_list = [None for _ in range(self.world_size)]
+
+        c10d.all_gather_object(obj_list, obj, group=pg)
+
+        for r, o in enumerate(obj_list):
+            self.assertTrue(isinstance(o, dict))
+            self.assertTrue(set(o.keys()), {"rank", "world_size"})
+            self.assertEqual(o["rank"], r)
+            self.assertEqual(o["world_size"], self.world_size)
+
+        c10d.destroy_process_group(pg)
+
+        self.assertTrue(ALLGATHER in num_hook_fired)
+        self.assertEqual(len(num_hook_fired), 1)
+        # two allgathers, one for size and another for values
+        self.assertEqual(num_hook_fired[ALLGATHER], 2)
+        self.assertTrue(all(duration > 0 for duration in durations[ALLGATHER]))
 
 
 class NcclErrorHandlingTest(MultiProcessTestCase):
