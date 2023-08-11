@@ -5,6 +5,7 @@ import operator
 from typing import List, Optional, Union
 
 from sympy import Expr
+from collections import namedtuple
 
 import torch
 import torch._inductor as inductor
@@ -73,6 +74,8 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
             patterns.apply(gm.graph)
         if is_inference:
             inference_patterns.apply(gm.graph)
+
+    reinplace_scatters(gm.graph)
 
     stable_topological_sort(gm.graph)
     gm.recompile()
@@ -477,6 +480,50 @@ def is_valid_splitwithsizes_cat(match):
         return False
 
     return True
+
+
+
+def reinplace_scatters(graph):
+    """
+    Reinplaces scatter operations in easy cases where the node being mutated
+    is only used by the scatter (users == 1)
+
+    Also handles input mutations when there is a corresponding copy node.
+    """
+
+    copy_nodes = {}
+    mutated_inputs = set()
+    for node in reversed(graph.nodes):
+        if node.target == aten.copy_.default:
+            copy_nodes[(node.args[0], node.args[1])] = node
+            mutated_inputs.add(node.args[0])
+        elif node.op == 'output':
+            pass
+        else:
+            break
+
+    InplaceableOp = namedtuple("InplaceableOp", ["inplace_op", "mutated_arg"])
+
+    inplaceable_ops = {
+        aten.index_put.default: InplaceableOp(aten.index_put_.default, 0),
+    }
+    for node in graph.nodes:
+        if (inplaceable_op := inplaceable_ops.get(node.target, False)):
+            mutated_arg = node.args[inplaceable_op.mutated_arg]
+            if mutated_arg.op == 'placeholder':
+                if not (copy_node := copy_nodes.get((mutated_arg, node), False)):
+                    continue
+
+                # Check for any uses other than current node and copy_ epilogue
+                if len(mutated_arg.users) > 2:
+                    continue
+
+                graph.erase_node(copy_node)
+                node.target = inplaceable_op.inplace_op
+            else:
+                if len(mutated_arg.users) > 1:
+                    continue
+                node.target = inplaceable_op.inplace_op
 
 
 @register_lowering_pattern(
