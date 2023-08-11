@@ -283,6 +283,7 @@ class WrapperCodeGen(CodeGen):
         self.comment = "#"
         self.namespace = ""
         self.none_str = "None"
+        self.optional_tensor_str = "None"
         self.size = "size()"
         self.stride = "stride()"
         self.first_device_guard = True
@@ -896,6 +897,8 @@ class CppWrapperCodeGen(WrapperCodeGen):
 
     def __init__(self):
         super().__init__()
+        from ..ir import OptionalTensor
+
         self.declare = "auto "
         self.ending = ";"
         self.open_bracket = "{"
@@ -903,6 +906,7 @@ class CppWrapperCodeGen(WrapperCodeGen):
         self.comment = "//"
         self.namespace = "at::"
         self.none_str = "at::Tensor()"
+        self.optional_tensor_str = repr(OptionalTensor())
         self.extern_call_ops = set()
         self.size = "sizes()"
         self.stride = "strides()"
@@ -1012,6 +1016,7 @@ class CppWrapperCodeGen(WrapperCodeGen):
                 c10::optional<at::Scalar> optional_scalar;
                 c10::optional<c10::string_view> optional_string;
                 c10::optional<at::Layout> optional_layout;
+                c10::optional<at::Tensor> optional_tensor;
                 torch::List<c10::optional<at::Scalar>> optional_list;
                 """
             )
@@ -1294,7 +1299,7 @@ class CppWrapperCodeGen(WrapperCodeGen):
         from .cpp import DTYPE_TO_ATEN
 
         if val is None:
-            return self.none_str
+            return self.optional_tensor_str
         elif isinstance(val, bool):
             return "true" if val else "false"
         elif isinstance(val, str):
