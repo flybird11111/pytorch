@@ -29,7 +29,8 @@ Tensor& set_cuda_(Tensor& result) {
 
 Tensor& resize_storage_cuda_(Tensor& result, int64_t s) {
   auto storage = result.storage().unsafeGetStorageImpl();
-  auto size_bytes = s * elementSize(result.scalar_type());
+  auto size_bytes_i = s * elementSize(result.scalar_type());
+  const auto size_bytes = static_cast<size_t>(size_bytes_i);
   resize_bytes_cuda(storage, size_bytes);
   return result;
 }

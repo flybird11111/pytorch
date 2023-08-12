@@ -855,7 +855,7 @@ class FlatParamHandle:
             sharded_flat_param, numel_padded = FlatParamHandle._get_shard(
                 flat_param, self.rank, self.world_size
             )
-            torch.resize_storage_(flat_param, 0)  # type: ignore[call-overload]
+            flat_param = torch.resize_storage_(flat_param, 0)  # type: ignore[call-overload]
             flat_param.set_(sharded_flat_param)
             start_idx = sharded_flat_param.numel() * self.rank
             end_idx = sharded_flat_param.numel() * (self.rank + 1) - 1  # inclusive

@@ -15,6 +15,8 @@
 #include <ATen/ops/_resize_output_native.h>
 #endif
 
+#include <iostream>
+
 namespace at { namespace native {
 
 // Returns true if resize is necessary
@@ -88,6 +90,7 @@ const Tensor& _resize_output_(const Tensor& self, IntArrayRef shape, c10::Device
 }
 
 void resize_bytes_cpu(StorageImpl* storage, size_t size_bytes) {
+  std::cout << "Resizing on cpu?" << std::endl;
   TORCH_CHECK(storage->resizable(), "Trying to resize storage that is not resizable");
 
   at::DataPtr new_data;
@@ -101,6 +104,7 @@ void resize_bytes_cpu(StorageImpl* storage, size_t size_bytes) {
   if (old_data != nullptr && copy_capacity > 0) {
     memcpy(storage->mutable_data(), old_data.get(), copy_capacity);
   }
+  std::cout << "done resizing on cpu" << std::endl;
 }
 
 // Call the sparse implementation in SparseTensor.cpp directly.
@@ -157,8 +161,12 @@ const Tensor& resize_as_(
 
 
 void resize_bytes_meta(StorageImpl* storage, c10::SymInt size_bytes) {
+  std::cout << "Resizing on meta?" << std::endl;
+
   TORCH_CHECK(storage->resizable(), "Trying to resize storage that is not resizable");
   storage->set_nbytes(std::move(size_bytes));
+  std::cout << "Done resizing on meta" << std::endl;
+
 }
 
 static void maybe_resize_storage_meta(TensorImpl* self, c10::SymInt new_size_bytes) {
