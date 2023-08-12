@@ -855,14 +855,10 @@ class FlatParamHandle:
             sharded_flat_param, numel_padded = FlatParamHandle._get_shard(
                 flat_param, self.rank, self.world_size
             )
-            original_storage = flat_param._typed_storage()
-            flat_param.set_(sharded_flat_param)  # type: ignore[call-overload]
+            torch.set_and_clear_storage_(flat_param, sharded_flat_param)  # type: ignore[call-overload]
             start_idx = sharded_flat_param.numel() * self.rank
             end_idx = sharded_flat_param.numel() * (self.rank + 1) - 1  # inclusive
-            if original_storage._size() > 0:
-                original_storage._resize_(0)
             self._init_shard_metadata(numel_padded, start_idx, end_idx)
-            # flat_param = torch._reset_storage(flat_param)
         if self._use_orig_params:
             self._use_sharded_views()
 
@@ -1255,11 +1251,11 @@ class FlatParamHandle:
         if not self.uses_sharded_strategy:
             return False
         unsharded_flat_param = self._get_padded_unsharded_flat_param()
-        # already_unsharded = torch._same_storage_size(unsharded_flat_param, unsharded_flat_param.numel())
-        already_unsharded = (
-            unsharded_flat_param._typed_storage()._size()
-            == unsharded_flat_param.numel()
-        )
+        already_unsharded = torch._same_storage_size(unsharded_flat_param, unsharded_flat_param.numel())
+        # already_unsharded = (
+        #     unsharded_flat_param._typed_storage()._size()
+        #     == unsharded_flat_param.numel()
+        # )
         return not already_unsharded
 
     def _alloc_padded_unsharded_flat_param(self):
@@ -2420,7 +2416,7 @@ class FlatParamHandle:
     def _check_on_compute_device(self, tensor: Tensor):
         _p_assert(
             tensor.device == self.device,
-            f"Expects tensor to be on the compute device {self.device}",
+            f"Expects tensor to be on the compute device {self.device}, was on {tensor.device}",
         )
 
     def _check_on_cpu(self, tensor: Tensor):
