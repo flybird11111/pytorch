@@ -183,6 +183,25 @@
 
 - func: _set_data(Tensor(a!) self, Tensor new_data) -> Tensor
 
+- func: _same_storage(Tensor(a!) self, Tensor b) -> bool
+
+- func: _data_ptr_allocated(Tensor(a!) self) -> bool
+
+- func: _same_storage_size(Tensor(a!) self, int size) -> bool
+
+- func: _storage_size_allocated(Tensor(a!) self) -> bool
+
+# Should this be in the `set.*` lass of native ops?
+- func: set_and_clear_storage_(Tensor(a!) self, Tensor source) -> Tensor(a!)
+- func: clear_storage_(Tensor(a!) self) -> Tensor(a!)
+
+- func: resize_storage_(Tensor(a!) self, int s) -> Tensor(a!)
+  dispatch:
+    CPU: resize_storage_cpu_
+    CUDA: resize_storage_cuda_
+    Meta: resize_storage_meta_
+  autogen: resize_storage, resize_storage.out
+
 - func: sym_constrain_range(Scalar size, int? min=None, int? max=None) -> ()
   dispatch:
     CPU: sym_constrain_range_cpu
@@ -7492,7 +7511,7 @@
     CPU, CUDA, Meta, MPS: set_
   autogen: set.source_Storage, set.source_Storage_out
 
-- func: set_.source_Storage_storage_offset(Tensor(a!) self, Storage source, SymInt storage_offset, SymInt[] size, SymInt[] stride=[]) -> Tensor(a!)
+- func: set_.source_Storage_storage_offset(Tensor(a!) self, Storage source, SymInt storage_offset, SymInt[] size, SymInt[] stride=[], bool cross_device=False) -> Tensor(a!)
   variants: method
   device_check: NoCheck
   device_guard: False
