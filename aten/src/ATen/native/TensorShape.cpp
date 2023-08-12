@@ -403,24 +403,6 @@ Tensor& resize_storage_meta_(Tensor& result, int64_t s) {
   return result;
 }
 
-Tensor& clear_storage_(Tensor& result) {
-  auto storage = result.storage().unsafeGetStorageImpl();
-  at::DataPtr blank_data;
-  storage->set_data_ptr(std::move(blank_data));
-  storage->nbytes();
-  storage->set_nbytes(0);
-  return result;
-}
-
-Tensor& set_and_clear_storage_(Tensor& result, Tensor const& source) {
- if (result.unsafeGetTensorImpl() != source.unsafeGetTensorImpl()) {
-    clear_storage_(result);
-    return result.set_(source.storage(), source.storage_offset(), source.sizes(), source.strides(), true);
-  }
-  return result;
-}
-
-
 // unify with cuda implementation?  This is not done to avoid a dispatch in resize_impl_cpu_
 Tensor& set_storage_cpu_(Tensor& result, Storage storage, int64_t storage_offset, IntArrayRef size, IntArrayRef stride, bool cross_device) {
   checkSetStorage(result, std::move(storage), storage_offset, size, stride, cross_device);

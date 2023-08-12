@@ -191,10 +191,6 @@
 
 - func: _storage_size_allocated(Tensor(a!) self) -> bool
 
-# Should this be in the `set.*` lass of native ops?
-- func: set_and_clear_storage_(Tensor(a!) self, Tensor source) -> Tensor(a!)
-- func: clear_storage_(Tensor(a!) self) -> Tensor(a!)
-
 - func: resize_storage_(Tensor(a!) self, int s) -> Tensor(a!)
   dispatch:
     CPU: resize_storage_cpu_
