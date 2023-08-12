@@ -1339,12 +1339,15 @@ class FlatParamHandle:
         Switches to using the *unpadded* unsharded flat parameter, which is a
         view into the *padded* unsharded flat parameter.
         """
+        print("_use_unsharded_flat_param")
         unsharded_size = self.flat_param._unpadded_unsharded_size
-        self.flat_param.data = padded_unsharded_flat_param[
+        flat_param_part = padded_unsharded_flat_param[
             : unsharded_size.numel()
-        ].view(
+        ]
+        flat_param_part_view = flat_param_part.view(
             unsharded_size
         )  # this `.view()` is not autograd visible
+        self.flat_param.data = flat_param_part
         in_forward = self._training_state == HandleTrainingState.FORWARD
         in_pre_backward = self._training_state == HandleTrainingState.BACKWARD_PRE
         if self._use_orig_params:

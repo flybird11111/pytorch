@@ -162,6 +162,7 @@ def _alloc_storage(tensor: torch.Tensor, size: torch.Size) -> bool:
                 not torch._data_ptr_allocated(tensor),
                 f"Tensor storage should have been resized to be 0 but got PLACEHOLDEr",
             )
+            # tensor._typed_storage()._resize_(size.numel())
             torch.resize_storage_(tensor, size.numel())
         return not already_allocated
 
