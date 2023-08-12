@@ -855,7 +855,8 @@ class FlatParamHandle:
             sharded_flat_param, numel_padded = FlatParamHandle._get_shard(
                 flat_param, self.rank, self.world_size
             )
-            torch.set_and_clear_storage_(flat_param, sharded_flat_param)  # type: ignore[call-overload]
+            torch.resize_storage_(flat_param, 0)  # type: ignore[call-overload]
+            flat_param.set_(sharded_flat_param)
             start_idx = sharded_flat_param.numel() * self.rank
             end_idx = sharded_flat_param.numel() * (self.rank + 1) - 1  # inclusive
             self._init_shard_metadata(numel_padded, start_idx, end_idx)
@@ -1339,7 +1340,6 @@ class FlatParamHandle:
         Switches to using the *unpadded* unsharded flat parameter, which is a
         view into the *padded* unsharded flat parameter.
         """
-        print("_use_unsharded_flat_param")
         unsharded_size = self.flat_param._unpadded_unsharded_size
         flat_param_part = padded_unsharded_flat_param[
             : unsharded_size.numel()
